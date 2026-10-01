@@ -11,4 +11,4 @@ overwrites it.
 See the [tramaj README](https://github.com/lucasdicioccio/tramaj#readme) for what
 Tramaj is and how to use this package.
 
-Synced from `lucasdicioccio/tramaj` at `0cdf502`.
+Synced from `lucasdicioccio/tramaj` at `2b9dfec`.
