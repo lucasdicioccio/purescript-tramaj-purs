@@ -129,7 +129,12 @@ data Expr
   | Lambda (Array String) Expr
   | Let String Expr Expr
   | StringLit String
-  | NumberLit Number
+  -- | A number literal is an integer or a float by its form (reference.md
+  -- | §5): `IntLit` holds a whole number in the integer range
+  -- | (`Tramaj.Json.inIntegerRange`), `FloatLit` a finite double, and
+  -- | neither holds a negative zero.
+  | IntLit Number
+  | FloatLit Number
   | BoolLit Boolean
   | NullLit
   | ArrayLit (Array Expr)
@@ -141,6 +146,12 @@ data Expr
   | Filter Expr Expr
   | Scan Expr Expr Expr
   | Fold Expr Expr Expr
+  | -- | `sort-by(collection, function)` and, with the flag set,
+    -- | `sort-by-descending(collection, function)` (reference.md §11,
+    -- | *Sorting*): the elements of the collection ordered by the key the
+    -- | function gives each of them. A core constructor for the reason
+    -- | `Map` is one: the key function needs a fresh binding per element.
+    SortBy Boolean Expr Expr
   | Concat Expr Expr
   | Import String (Array (Tuple String ParamValue))
   | AdaptActions Expr ActionAdaptation (Maybe Expr)
@@ -204,7 +215,8 @@ derive instance eqExpr :: Eq Expr
 data TypeConstraintArg
   = TCType TypeExpr
   | TCScalarStr String
-  | TCScalarNum Number
+  | TCScalarInt Number
+  | TCScalarFloat Number
   | TCScalarBool Boolean
   | TCScalarNull
 
@@ -213,7 +225,8 @@ derive instance eqTypeConstraintArg :: Eq TypeConstraintArg
 instance showTypeConstraintArg :: Show TypeConstraintArg where
   show (TCType t) = "TCType (" <> show t <> ")"
   show (TCScalarStr s) = "TCScalarStr " <> show s
-  show (TCScalarNum n) = "TCScalarNum " <> show n
+  show (TCScalarInt n) = "TCScalarInt " <> show n
+  show (TCScalarFloat n) = "TCScalarFloat " <> show n
   show (TCScalarBool b) = "TCScalarBool " <> show b
   show TCScalarNull = "TCScalarNull"
 
@@ -224,7 +237,8 @@ instance showExpr :: Show Expr where
   show (Lambda params body) = "Lambda " <> show params <> " (" <> show body <> ")"
   show (Let name value body) = "Let " <> show name <> " (" <> show value <> ") (" <> show body <> ")"
   show (StringLit s) = "StringLit " <> show s
-  show (NumberLit n) = "NumberLit " <> show n
+  show (IntLit n) = "IntLit " <> show n
+  show (FloatLit n) = "FloatLit " <> show n
   show (BoolLit b) = "BoolLit " <> show b
   show NullLit = "NullLit"
   show (ArrayLit elems) = "ArrayLit " <> show elems
@@ -237,6 +251,7 @@ instance showExpr :: Show Expr where
   show (Filter coll fn) = "Filter (" <> show coll <> ") (" <> show fn <> ")"
   show (Scan coll initial fn) = "Scan (" <> show coll <> ") (" <> show initial <> ") (" <> show fn <> ")"
   show (Fold coll initial fn) = "Fold (" <> show coll <> ") (" <> show initial <> ") (" <> show fn <> ")"
+  show (SortBy descending coll fn) = "SortBy " <> show descending <> " (" <> show coll <> ") (" <> show fn <> ")"
   show (Concat l r) = "Concat (" <> show l <> ") (" <> show r <> ")"
   show (Import name params) = "Import " <> show name <> " " <> show params
   show (AdaptActions target adaptation fn) =
@@ -259,7 +274,7 @@ instance showExpr :: Show Expr where
 -- | declaration name from a typo.
 -- |
 -- | `TPrim` is recognized here, at parse time, rather than left for
--- | resolution to classify: the five primitive names are a closed, reserved
+-- | resolution to classify: the six primitive names are a closed, reserved
 -- | lexical set (v4-types §1), not ordinary identifiers that happen to
 -- | resolve to a primitive.
 data TypeExpr
@@ -475,7 +490,8 @@ subExprs (Call fn args) = Array.cons fn args
 subExprs (Lambda _ body) = [ body ]
 subExprs (Let _ value body) = [ value, body ]
 subExprs (StringLit _) = []
-subExprs (NumberLit _) = []
+subExprs (IntLit _) = []
+subExprs (FloatLit _) = []
 subExprs (BoolLit _) = []
 subExprs NullLit = []
 subExprs (ArrayLit elems) = elems
@@ -487,6 +503,7 @@ subExprs (Map coll fn) = [ coll, fn ]
 subExprs (Filter coll fn) = [ coll, fn ]
 subExprs (Scan coll initial fn) = [ coll, initial, fn ]
 subExprs (Fold coll initial fn) = [ coll, initial, fn ]
+subExprs (SortBy _ coll fn) = [ coll, fn ]
 subExprs (Concat l r) = [ l, r ]
 subExprs (Import _ params) = Array.mapMaybe paramExpr params
   where
@@ -545,7 +562,8 @@ numberAllocs e = (go 0 e).expr
         r2 = go r1.next body
     in { next: r2.next, expr: Let name r1.expr r2.expr }
   go n e'@(StringLit _) = { next: n, expr: e' }
-  go n e'@(NumberLit _) = { next: n, expr: e' }
+  go n e'@(IntLit _) = { next: n, expr: e' }
+  go n e'@(FloatLit _) = { next: n, expr: e' }
   go n e'@(BoolLit _) = { next: n, expr: e' }
   go n NullLit = { next: n, expr: NullLit }
   go n (ArrayLit elems) = let r = goArray n elems in { next: r.next, expr: ArrayLit r.arr }
@@ -579,6 +597,10 @@ numberAllocs e = (go 0 e).expr
         r2 = go r1.next initial
         r3 = go r2.next fn
     in { next: r3.next, expr: Fold r1.expr r2.expr r3.expr }
+  go n (SortBy descending coll fn) =
+    let r1 = go n coll
+        r2 = go r1.next fn
+    in { next: r2.next, expr: SortBy descending r1.expr r2.expr }
   go n (Concat l r) =
     let r1 = go n l
         r2 = go r1.next r
